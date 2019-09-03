@@ -15,6 +15,19 @@
 #include <iostream>
 #include <string>
 #include <sstream>
+#include <mutex>
+#include <condition_variable>
+
+std::mutex m;
+std::condition_variable cv;
+bool completed = false;
+
+void compl_callback(void *arg, int err) {
+  std::cout << "Operation completed" << std::endl;
+  std::lock_guard<std::mutex> lk(m);
+  completed = true;
+  cv.notify_all();
+}
 
 int main(int argc, const char **argv)
 {
@@ -124,6 +137,8 @@ int main(int argc, const char **argv)
     int order = 0;
     librbd::RBD rbd;
     librbd::Image image;
+    librbd::cache::ocf::Context ocf_context;
+    librbd::cache::ocf::Cache *cache;
 
     ret = rbd.create(io_ctx, name.c_str(), size, &order);
     if (ret < 0) {
@@ -134,6 +149,13 @@ int main(int argc, const char **argv)
       std::cout << "we just created an rbd image" << std::endl;
     }
 
+    cache = ocf_context.create_cache(io_ctx);
+    cache->start();
+
+    cache->attach("cache", compl_callback, nullptr);
+    std::unique_lock<std::mutex> lk(m);
+    cv.wait(lk, [] { return completed; });    
+
     ret = rbd.open(io_ctx, image, name.c_str(), NULL);
     if (ret < 0) {
       std::cerr << "couldn't open the rbd image! error " << ret << std::endl;
@@ -143,6 +165,11 @@ int main(int argc, const char **argv)
       std::cout << "we just opened the rbd image" << std::endl;
     }
 
+    completed = false;
+    cache->add_core(&image, compl_callback, nullptr);
+    cv.wait(lk, [] { return completed; });    
+
+#if 0
     int TEST_IO_SIZE = 512;
     char test_data[TEST_IO_SIZE + 1];
     int i;
@@ -185,7 +212,7 @@ int main(int argc, const char **argv)
     } else {
       std::cout << "we read our data on the image successfully" << std::endl;
     }
-
+#endif
     image.close();
 
     /*

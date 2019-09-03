@@ -1206,6 +1206,16 @@ CEPH_RBD_API int rbd_pool_stats_option_add_uint64(rbd_pool_stats_t stats,
                                                   uint64_t* stat_val);
 CEPH_RBD_API int rbd_pool_stats_get(rados_ioctx_t io, rbd_pool_stats_t stats);
 
+typedef void *rbd_cache_ctx_t;
+typedef void *rbd_cache_t;
+typedef void *rbd_cached_volume_t;
+
+CEPH_RBD_API int rbd_init_cache_context(rbd_cache_ctx_t *ctx);
+CEPH_RBD_API int rbd_create_cache(rbd_cache_ctx_t ctx, rados_ioctx_t p, const char *file, rbd_cache_t *cache);
+CEPH_RBD_API int rbd_create_cached_volume(rbd_cache_t cache, rbd_image_t image, rbd_cached_volume_t *vol);
+CEPH_RBD_API int rbd_attach_cached_volume(rbd_image_t image, rbd_cached_volume_t vol);
+
+
 #ifdef __cplusplus
 }
 #endif

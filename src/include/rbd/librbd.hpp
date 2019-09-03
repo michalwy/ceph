@@ -392,6 +392,12 @@ public:
   virtual void handle_notify() = 0;
 };
 
+namespace cache {
+namespace ocf {
+class Cache;
+}
+}
+
 class CEPH_RBD_API Image
 {
 public:
@@ -654,12 +660,69 @@ public:
 
 private:
   friend class RBD;
+  friend class cache::ocf::Cache;
 
   Image(const Image& rhs);
   const Image& operator=(const Image& rhs);
 
   image_ctx_t ctx;
 };
+
+namespace cache {
+namespace ocf {
+
+typedef void *context_ctx_t;
+typedef void *cache_ctx_t;
+typedef void *cached_volume_ctx_t;
+
+typedef void (*complete_t)(void *, int);
+
+class CEPH_RBD_API Context {
+public:
+  Context();
+  ~Context();
+
+  Cache *create_cache(IoCtx& io_ctx);
+
+private:
+  friend class Cache;
+
+  context_ctx_t ctx;
+};
+
+class CEPH_RBD_API CachedVolume {
+public:
+  cached_volume_ctx_t get_ctx() const {
+    return ctx;
+  }
+
+private:
+  CachedVolume(cached_volume_ctx_t c) {
+    ctx = c;
+  }
+
+  cached_volume_ctx_t ctx;
+
+  friend class Cache;
+};
+
+class CEPH_RBD_API Cache {
+public:
+  Cache(Context *context, IoCtx& io_ctx);
+  ~Cache();
+
+  int start();
+  int attach(const std::string& cache, complete_t compl_fn, void *arg);
+
+  CachedVolume *add_core(Image *image, complete_t compl_fn, void *arg);
+  CachedVolume *add_core(rbd_image_t image, complete_t compl_fn, void *arg);
+
+private:
+  cache_ctx_t ctx;
+};
+
+}
+}
 
 }
 

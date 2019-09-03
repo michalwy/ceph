@@ -41,6 +41,9 @@
 #include "librbd/io/AioCompletion.h"
 #include "librbd/io/ImageRequestWQ.h"
 #include "librbd/io/ReadResult.h"
+#include "librbd/cache/ocf/Ctx.h"
+#include "librbd/cache/ocf/CacheCtx.h"
+#include "librbd/cache/ocf/CachedVolumeCtx.h"
 #include <algorithm>
 #include <string>
 #include <vector>
@@ -2115,6 +2118,7 @@ namespace librbd {
   ssize_t Image::read(uint64_t ofs, size_t len, bufferlist& bl)
   {
     ImageCtx *ictx = (ImageCtx *)ctx;
+    cout << "Reading " << len << " bytes @ " << ofs << std::endl;
     tracepoint(librbd, read_enter, ictx, ictx->name.c_str(), ictx->snap_name.c_str(), ictx->read_only, ofs, len);
     bufferptr ptr(len);
     bl.push_back(std::move(ptr));
@@ -2200,6 +2204,7 @@ namespace librbd {
   ssize_t Image::write(uint64_t ofs, size_t len, bufferlist& bl)
   {
     ImageCtx *ictx = (ImageCtx *)ctx;
+    cout << "Writting " << len << " bytes @ " << ofs << std::endl;
     tracepoint(librbd, write_enter, ictx, ictx->name.c_str(), ictx->snap_name.c_str(), ictx->read_only, ofs, len, bl.length() < len ? NULL : bl.c_str());
     if (bl.length() < len) {
       tracepoint(librbd, write_exit, -EINVAL);
@@ -2634,6 +2639,70 @@ namespace librbd {
     return librbd::api::Config<>::list(ictx, options);
   }
 
+  namespace cache {
+  namespace ocf {
+
+    class CompletionContext : public ::Context {
+    public:
+      CompletionContext(complete_t fn, void *arg) {
+        m_fn = fn;
+        m_arg = arg;
+      }
+
+    protected:
+      void finish(int err) override {
+        m_fn(m_arg, err);
+      }
+    private:
+      complete_t m_fn;
+      void *m_arg;
+    };
+
+    Context::Context() {
+      ctx = new Ctx();
+    }
+
+    Context::~Context() {
+      delete (Ctx *)ctx;
+    }
+
+    Cache *Context::create_cache(IoCtx& io_ctx) {
+      return new Cache(this, io_ctx);
+    }
+
+    Cache::Cache(Context *context, IoCtx& io_ctx) {
+      ctx = new CacheCtx(reinterpret_cast<Ctx *>(context->ctx), io_ctx);
+    }
+
+    Cache::~Cache() {
+      delete reinterpret_cast<CacheCtx *>(ctx);
+    }
+
+    int Cache::start() {
+      CacheCtx *cctx = reinterpret_cast<CacheCtx *>(ctx);
+      return cctx->start();
+    }
+
+    int Cache::attach(const std::string& file, complete_t compl_fn, void *arg) {
+      CacheCtx *cctx = reinterpret_cast<CacheCtx *>(ctx);
+      return cctx->attach(file, new CompletionContext(compl_fn, arg));
+    }
+
+    CachedVolume *Cache::add_core(Image *image, complete_t compl_fn, void *arg) {
+      return add_core(image->ctx, compl_fn, arg);
+    }
+
+    CachedVolume *Cache::add_core(rbd_image_t image, complete_t compl_fn, void *arg) {
+      CacheCtx *cctx = reinterpret_cast<CacheCtx *>(ctx);
+      CachedVolumeCtx *cv_ctx = cctx->add_core((ImageCtx *)image, new CompletionContext(compl_fn, arg));
+      if (!cv_ctx) {
+        return NULL;
+      }
+      return new CachedVolume(cv_ctx);
+    }
+
+  }
+  }
 } // namespace librbd
 
 extern "C" void rbd_version(int *major, int *minor, int *extra)
@@ -6263,4 +6332,63 @@ extern "C" void rbd_config_image_list_cleanup(rbd_config_option_t *options,
   for (int i = 0; i < max_options; ++i) {
     config_option_cleanup(options[i]);
   }
+}
+
+extern "C" int rbd_init_cache_context(rbd_cache_ctx_t *ctx) {
+  *ctx = new librbd::cache::ocf::Context();
+  return 0;
+}
+
+struct compl_ctx {
+  std::mutex m;
+  std::condition_variable cv;
+  bool completed;
+};
+
+void compl_callback(void *arg, int err) {
+  struct compl_ctx *cctx = (struct compl_ctx *)arg;
+  std::cout << "Operation completed" << std::endl;
+  std::lock_guard<std::mutex> lk(cctx->m);
+  cctx->completed = true;
+  cctx->cv.notify_all();
+}
+
+extern "C" int rbd_create_cache(rbd_cache_ctx_t ctx, rados_ioctx_t p, const char *file, rbd_cache_t *cache) {
+  librbd::cache::ocf::Cache *c;
+  librbd::cache::ocf::Context *ocf_context = (librbd::cache::ocf::Context *)ctx;
+  librados::IoCtx io_ctx;
+  librados::IoCtx::from_rados_ioctx_t(p, io_ctx);
+
+  c = ocf_context->create_cache(io_ctx);
+  c->start();
+
+  struct compl_ctx cctx;
+  cctx.completed = false;
+  c->attach(file, compl_callback, &cctx);
+
+  std::unique_lock<std::mutex> lk(cctx.m);
+  cctx.cv.wait(lk, [&cctx] { return cctx.completed; });
+
+  *cache = c;
+  return 0;
+}
+
+extern "C" int rbd_create_cached_volume(rbd_cache_t cache, rbd_image_t image, rbd_cached_volume_t *vol) {
+  librbd::cache::ocf::Cache *c = (librbd::cache::ocf::Cache *)cache;
+
+  struct compl_ctx cctx;
+  cctx.completed = false;
+  *vol = c->add_core(image, compl_callback, &cctx);
+
+  std::unique_lock<std::mutex> lk(cctx.m);
+  cctx.cv.wait(lk, [&cctx] { return cctx.completed; });
+
+  return 0;
+}
+
+extern "C" int rbd_attach_cached_volume(rbd_image_t image, rbd_cached_volume_t vol) {
+  librbd::cache::ocf::CachedVolume *v = (librbd::cache::ocf::CachedVolume *)vol;
+  librbd::ImageCtx *ictx = (librbd::ImageCtx *)image;
+  ictx->image_cache = (librbd::cache::ocf::CachedVolumeCtx *)v->get_ctx();
+  return 0;
 }

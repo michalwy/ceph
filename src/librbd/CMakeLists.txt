@@ -141,7 +141,82 @@ set(librbd_internal_srcs
   watcher/RewatchRequest.cc
   ${CMAKE_SOURCE_DIR}/src/common/ContextCompletion.cc)
 
+set(librbd_ocf_srcs
+  cache/src/ocf/cleaning/acp.c
+  cache/src/ocf/cleaning/alru.c
+  cache/src/ocf/cleaning/cleaning.c
+  cache/src/ocf/cleaning/nop.c
+  cache/src/ocf/concurrency/ocf_cache_concurrency.c
+  cache/src/ocf/concurrency/ocf_concurrency.c
+  cache/src/ocf/engine/cache_engine.c
+  cache/src/ocf/engine/engine_bf.c
+  cache/src/ocf/engine/engine_common.c
+  cache/src/ocf/engine/engine_d2c.c
+  cache/src/ocf/engine/engine_discard.c
+  cache/src/ocf/engine/engine_fast.c
+  cache/src/ocf/engine/engine_inv.c
+  cache/src/ocf/engine/engine_ops.c
+  cache/src/ocf/engine/engine_pt.c
+  cache/src/ocf/engine/engine_rd.c
+  cache/src/ocf/engine/engine_wa.c
+  cache/src/ocf/engine/engine_wb.c
+  cache/src/ocf/engine/engine_wi.c
+  cache/src/ocf/engine/engine_wt.c
+  cache/src/ocf/engine/engine_zero.c
+  cache/src/ocf/env/ocf_env.c
+  cache/src/ocf/eviction/eviction.c
+  cache/src/ocf/eviction/lru.c
+  cache/src/ocf/metadata/metadata.c
+  cache/src/ocf/metadata/metadata_collision.c
+  cache/src/ocf/metadata/metadata_hash.c
+  cache/src/ocf/metadata/metadata_io.c
+  cache/src/ocf/metadata/metadata_misc.c
+  cache/src/ocf/metadata/metadata_partition.c
+  cache/src/ocf/metadata/metadata_raw_atomic.c
+  cache/src/ocf/metadata/metadata_raw.c
+  cache/src/ocf/metadata/metadata_raw_dynamic.c
+  cache/src/ocf/metadata/metadata_raw_volatile.c
+  cache/src/ocf/metadata/metadata_updater.c
+  cache/src/ocf/mngt/ocf_mngt_cache.c
+  cache/src/ocf/mngt/ocf_mngt_common.c
+  cache/src/ocf/mngt/ocf_mngt_core.c
+  cache/src/ocf/mngt/ocf_mngt_core_pool.c
+  cache/src/ocf/mngt/ocf_mngt_flush.c
+  cache/src/ocf/mngt/ocf_mngt_io_class.c
+  cache/src/ocf/mngt/ocf_mngt_misc.c
+  cache/src/ocf/ocf_cache.c
+  cache/src/ocf/ocf_core.c
+  cache/src/ocf/ocf_ctx.c
+  cache/src/ocf/ocf_io.c
+  cache/src/ocf/ocf_io_class.c
+  cache/src/ocf/ocf_logger.c
+  cache/src/ocf/ocf_metadata.c
+  cache/src/ocf/ocf_queue.c
+  cache/src/ocf/ocf_request.c
+  cache/src/ocf/ocf_stats_builder.c
+  cache/src/ocf/ocf_stats.c
+  cache/src/ocf/ocf_trace.c
+  cache/src/ocf/ocf_volume.c
+  cache/src/ocf/utils/utils_async_lock.c
+  cache/src/ocf/utils/utils_cache_line.c
+  cache/src/ocf/utils/utils_cleaner.c
+  cache/src/ocf/utils/utils_io.c
+  cache/src/ocf/utils/utils_list.c
+  cache/src/ocf/utils/utils_part.c
+  cache/src/ocf/utils/utils_pipeline.c
+  cache/src/ocf/utils/utils_realloc.c
+  cache/src/ocf/utils/utils_refcnt.c
+  cache/ocf/Ctx.cc
+  cache/ocf/VolumeType.cc
+  cache/ocf/Volume.cc
+  cache/ocf/AIOVolume.cc
+  cache/ocf/RBDVolume.cc
+  cache/ocf/CacheCtx.cc
+  cache/ocf/CachedVolumeCtx.cc
+)
+
 add_library(rbd_api STATIC librbd.cc)
+add_library(rbd_ocf STATIC ${librbd_ocf_srcs})
 add_library(rbd_internal STATIC
   ${librbd_internal_srcs}
   $<TARGET_OBJECTS:rados_snap_set_diff_obj>)
@@ -156,6 +231,9 @@ if(WITH_LTTNG AND WITH_EVENTTRACE)
 endif()
 target_link_libraries(rbd_internal PRIVATE
   osdc)
+target_include_directories(rbd_ocf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cache/include)
+target_include_directories(rbd_ocf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cache/src/ocf/env)
+target_compile_options(rbd_ocf PRIVATE -Wno-pointer-arith -Wno-type-limits)
 
 add_library(librbd ${CEPH_SHARED}
   librbd.cc)
@@ -163,8 +241,11 @@ if(WITH_LTTNG)
   add_dependencies(librbd librbd-tp)
 endif()
 
+target_link_libraries(librbd PRIVATE aio)
+
 target_link_libraries(librbd PRIVATE
   rbd_internal
+  rbd_ocf
   rbd_types
   journal
   librados
