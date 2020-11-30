@@ -2,8 +2,9 @@
 // vim: ts=8 sw=2 smarttab
 
 #include "librbd/io/QueueImageDispatch.h"
-#include "common/dout.h"
 #include "common/Cond.h"
+#include "common/dout.h"
+#include "common/latency_tracker.h"
 #include "librbd/AsioEngine.h"
 #include "librbd/ImageCtx.h"
 #include "librbd/Utils.h"
@@ -13,38 +14,40 @@
 
 #define dout_subsys ceph_subsys_rbd
 #undef dout_prefix
-#define dout_prefix *_dout << "librbd::io::QueueImageDispatch: " << this \
-                           << " " << __func__ << ": "
+#define dout_prefix                                                            \
+  *_dout << "librbd::io::QueueImageDispatch: " << this << " " << __func__      \
+         << ": "
 
 namespace librbd {
 namespace io {
 
 template <typename I>
-QueueImageDispatch<I>::QueueImageDispatch(I* image_ctx)
-  : m_image_ctx(image_ctx), m_flush_tracker(new FlushTracker<I>(image_ctx)) {
+QueueImageDispatch<I>::QueueImageDispatch(I *image_ctx)
+    : m_image_ctx(image_ctx), m_flush_tracker(new FlushTracker<I>(image_ctx)) {
   auto cct = m_image_ctx->cct;
   ldout(cct, 5) << "ictx=" << image_ctx << dendl;
 }
 
-template <typename I>
-QueueImageDispatch<I>::~QueueImageDispatch() {
+template <typename I> QueueImageDispatch<I>::~QueueImageDispatch() {
   delete m_flush_tracker;
 }
 
 template <typename I>
-void QueueImageDispatch<I>::shut_down(Context* on_finish) {
+void QueueImageDispatch<I>::shut_down(Context *on_finish) {
   m_flush_tracker->shut_down();
   on_finish->complete(0);
 }
 
 template <typename I>
-bool QueueImageDispatch<I>::read(
-    AioCompletion* aio_comp, Extents &&image_extents, ReadResult &&read_result,
-    IOContext io_context, int op_flags, int read_flags,
-    const ZTracer::Trace &parent_trace, uint64_t tid,
-    std::atomic<uint32_t>* image_dispatch_flags,
-    DispatchResult* dispatch_result, Context** on_finish,
-    Context* on_dispatched) {
+bool QueueImageDispatch<I>::read(AioCompletion *aio_comp,
+                                 Extents &&image_extents,
+                                 ReadResult &&read_result, IOContext io_context,
+                                 int op_flags, int read_flags,
+                                 const ZTracer::Trace &parent_trace,
+                                 uint64_t tid,
+                                 std::atomic<uint32_t> *image_dispatch_flags,
+                                 DispatchResult *dispatch_result,
+                                 Context **on_finish, Context *on_dispatched) {
   auto cct = m_image_ctx->cct;
   ldout(cct, 20) << "tid=" << tid << dendl;
 
@@ -52,12 +55,14 @@ bool QueueImageDispatch<I>::read(
 }
 
 template <typename I>
-bool QueueImageDispatch<I>::write(
-    AioCompletion* aio_comp, Extents &&image_extents, bufferlist &&bl,
-    IOContext io_context, int op_flags, const ZTracer::Trace &parent_trace,
-    uint64_t tid, std::atomic<uint32_t>* image_dispatch_flags,
-    DispatchResult* dispatch_result, Context** on_finish,
-    Context* on_dispatched) {
+bool QueueImageDispatch<I>::write(AioCompletion *aio_comp,
+                                  Extents &&image_extents, bufferlist &&bl,
+                                  IOContext io_context, int op_flags,
+                                  const ZTracer::Trace &parent_trace,
+                                  uint64_t tid,
+                                  std::atomic<uint32_t> *image_dispatch_flags,
+                                  DispatchResult *dispatch_result,
+                                  Context **on_finish, Context *on_dispatched) {
   auto cct = m_image_ctx->cct;
   ldout(cct, 20) << "tid=" << tid << dendl;
 
@@ -66,12 +71,12 @@ bool QueueImageDispatch<I>::write(
 
 template <typename I>
 bool QueueImageDispatch<I>::discard(
-    AioCompletion* aio_comp, Extents &&image_extents,
+    AioCompletion *aio_comp, Extents &&image_extents,
     uint32_t discard_granularity_bytes, IOContext io_context,
-    const ZTracer::Trace &parent_trace,
-    uint64_t tid, std::atomic<uint32_t>* image_dispatch_flags,
-    DispatchResult* dispatch_result, Context** on_finish,
-    Context* on_dispatched) {
+    const ZTracer::Trace &parent_trace, uint64_t tid,
+    std::atomic<uint32_t> *image_dispatch_flags,
+    DispatchResult *dispatch_result, Context **on_finish,
+    Context *on_dispatched) {
   auto cct = m_image_ctx->cct;
   ldout(cct, 20) << "tid=" << tid << dendl;
 
@@ -80,11 +85,11 @@ bool QueueImageDispatch<I>::discard(
 
 template <typename I>
 bool QueueImageDispatch<I>::write_same(
-    AioCompletion* aio_comp, Extents &&image_extents, bufferlist &&bl,
+    AioCompletion *aio_comp, Extents &&image_extents, bufferlist &&bl,
     IOContext io_context, int op_flags, const ZTracer::Trace &parent_trace,
-    uint64_t tid, std::atomic<uint32_t>* image_dispatch_flags,
-    DispatchResult* dispatch_result, Context** on_finish,
-    Context* on_dispatched) {
+    uint64_t tid, std::atomic<uint32_t> *image_dispatch_flags,
+    DispatchResult *dispatch_result, Context **on_finish,
+    Context *on_dispatched) {
   auto cct = m_image_ctx->cct;
   ldout(cct, 20) << "tid=" << tid << dendl;
 
@@ -93,12 +98,12 @@ bool QueueImageDispatch<I>::write_same(
 
 template <typename I>
 bool QueueImageDispatch<I>::compare_and_write(
-    AioCompletion* aio_comp, Extents &&image_extents, bufferlist &&cmp_bl,
+    AioCompletion *aio_comp, Extents &&image_extents, bufferlist &&cmp_bl,
     bufferlist &&bl, uint64_t *mismatch_offset, IOContext io_context,
     int op_flags, const ZTracer::Trace &parent_trace, uint64_t tid,
-    std::atomic<uint32_t>* image_dispatch_flags,
-    DispatchResult* dispatch_result, Context** on_finish,
-    Context* on_dispatched) {
+    std::atomic<uint32_t> *image_dispatch_flags,
+    DispatchResult *dispatch_result, Context **on_finish,
+    Context *on_dispatched) {
   auto cct = m_image_ctx->cct;
   ldout(cct, 20) << "tid=" << tid << dendl;
 
@@ -106,12 +111,13 @@ bool QueueImageDispatch<I>::compare_and_write(
 }
 
 template <typename I>
-bool QueueImageDispatch<I>::flush(
-    AioCompletion* aio_comp, FlushSource flush_source,
-    const ZTracer::Trace &parent_trace, uint64_t tid,
-    std::atomic<uint32_t>* image_dispatch_flags,
-    DispatchResult* dispatch_result, Context** on_finish,
-    Context* on_dispatched) {
+bool QueueImageDispatch<I>::flush(AioCompletion *aio_comp,
+                                  FlushSource flush_source,
+                                  const ZTracer::Trace &parent_trace,
+                                  uint64_t tid,
+                                  std::atomic<uint32_t> *image_dispatch_flags,
+                                  DispatchResult *dispatch_result,
+                                  Context **on_finish, Context *on_dispatched) {
   auto cct = m_image_ctx->cct;
   ldout(cct, 20) << "tid=" << tid << dendl;
 
@@ -129,19 +135,21 @@ void QueueImageDispatch<I>::handle_finished(int r, uint64_t tid) {
 }
 
 template <typename I>
-bool QueueImageDispatch<I>::enqueue(
-    bool read_op, uint64_t tid, DispatchResult* dispatch_result,
-    Context** on_finish, Context* on_dispatched) {
+bool QueueImageDispatch<I>::enqueue(bool read_op, uint64_t tid,
+                                    DispatchResult *dispatch_result,
+                                    Context **on_finish,
+                                    Context *on_dispatched) {
+  LT_CP();
   if (!m_image_ctx->non_blocking_aio) {
     return false;
   }
 
   if (!read_op) {
     m_flush_tracker->start_io(tid);
-    *on_finish = new LambdaContext([this, tid, on_finish=*on_finish](int r) {
-        handle_finished(r, tid);
-        on_finish->complete(r);
-      });
+    *on_finish = new LambdaContext([this, tid, on_finish = *on_finish](int r) {
+      handle_finished(r, tid);
+      on_finish->complete(r);
+    });
   }
 
   *dispatch_result = DISPATCH_RESULT_CONTINUE;

@@ -2,9 +2,10 @@
 // vim: ts=8 sw=2 smarttab
 
 #include "librbd/exclusive_lock/ImageDispatch.h"
-#include "include/Context.h"
 #include "common/dout.h"
 #include "common/errno.h"
+#include "common/latency_tracker.h"
+#include "include/Context.h"
 #include "librbd/ExclusiveLock.h"
 #include "librbd/ImageCtx.h"
 #include "librbd/Utils.h"
@@ -15,8 +16,9 @@
 
 #define dout_subsys ceph_subsys_rbd
 #undef dout_prefix
-#define dout_prefix *_dout << "librbd::exclusive_lock::ImageDispatch: " \
-                           << this << " " << __func__ << ": "
+#define dout_prefix                                                            \
+  *_dout << "librbd::exclusive_lock::ImageDispatch: " << this << " "           \
+         << __func__ << ": "
 
 namespace librbd {
 namespace exclusive_lock {
@@ -24,15 +26,12 @@ namespace exclusive_lock {
 using util::create_context_callback;
 
 template <typename I>
-ImageDispatch<I>::ImageDispatch(I* image_ctx)
-  : m_image_ctx(image_ctx),
-    m_lock(ceph::make_shared_mutex(
-      util::unique_lock_name("librbd::exclusve_lock::ImageDispatch::m_lock",
-                             this))) {
-}
+ImageDispatch<I>::ImageDispatch(I *image_ctx)
+    : m_image_ctx(image_ctx),
+      m_lock(ceph::make_shared_mutex(util::unique_lock_name(
+          "librbd::exclusve_lock::ImageDispatch::m_lock", this))) {}
 
-template <typename I>
-void ImageDispatch<I>::shut_down(Context* on_finish) {
+template <typename I> void ImageDispatch<I>::shut_down(Context *on_finish) {
   // release any IO waiting on exclusive lock
   Contexts on_dispatches;
   {
@@ -50,7 +49,7 @@ void ImageDispatch<I>::shut_down(Context* on_finish) {
 template <typename I>
 void ImageDispatch<I>::set_require_lock(bool init_shutdown,
                                         io::Direction direction,
-                                        Context* on_finish) {
+                                        Context *on_finish) {
   // pause any matching IO from proceeding past this layer
   set_require_lock(direction, true);
 
@@ -61,12 +60,12 @@ void ImageDispatch<I>::set_require_lock(bool init_shutdown,
 
   // push through a flush for any in-flight writes at lower levels
   auto aio_comp = io::AioCompletion::create_and_start(
-    on_finish, util::get_image_ctx(m_image_ctx), io::AIO_TYPE_FLUSH);
+      on_finish, util::get_image_ctx(m_image_ctx), io::AIO_TYPE_FLUSH);
   auto req = io::ImageDispatchSpec::create_flush(
-    *m_image_ctx, io::IMAGE_DISPATCH_LAYER_EXCLUSIVE_LOCK, aio_comp,
-    (init_shutdown ?
-      io::FLUSH_SOURCE_EXCLUSIVE_LOCK_SKIP_REFRESH :
-      io::FLUSH_SOURCE_EXCLUSIVE_LOCK), {});
+      *m_image_ctx, io::IMAGE_DISPATCH_LAYER_EXCLUSIVE_LOCK, aio_comp,
+      (init_shutdown ? io::FLUSH_SOURCE_EXCLUSIVE_LOCK_SKIP_REFRESH
+                     : io::FLUSH_SOURCE_EXCLUSIVE_LOCK),
+      {});
   req->send();
 }
 
@@ -103,13 +102,15 @@ bool ImageDispatch<I>::set_require_lock(io::Direction direction, bool enabled) {
 }
 
 template <typename I>
-bool ImageDispatch<I>::read(
-    io::AioCompletion* aio_comp, io::Extents &&image_extents,
-    io::ReadResult &&read_result, IOContext io_context, int op_flags,
-    int read_flags, const ZTracer::Trace &parent_trace, uint64_t tid,
-    std::atomic<uint32_t>* image_dispatch_flags,
-    io::DispatchResult* dispatch_result, Context** on_finish,
-    Context* on_dispatched) {
+bool ImageDispatch<I>::read(io::AioCompletion *aio_comp,
+                            io::Extents &&image_extents,
+                            io::ReadResult &&read_result, IOContext io_context,
+                            int op_flags, int read_flags,
+                            const ZTracer::Trace &parent_trace, uint64_t tid,
+                            std::atomic<uint32_t> *image_dispatch_flags,
+                            io::DispatchResult *dispatch_result,
+                            Context **on_finish, Context *on_dispatched) {
+  LT_CP();
   auto cct = m_image_ctx->cct;
   ldout(cct, 20) << "image_extents=" << image_extents << dendl;
 
@@ -121,12 +122,13 @@ bool ImageDispatch<I>::read(
 }
 
 template <typename I>
-bool ImageDispatch<I>::write(
-    io::AioCompletion* aio_comp, io::Extents &&image_extents, bufferlist &&bl,
-    IOContext io_context, int op_flags, const ZTracer::Trace &parent_trace,
-    uint64_t tid, std::atomic<uint32_t>* image_dispatch_flags,
-    io::DispatchResult* dispatch_result, Context** on_finish,
-    Context* on_dispatched) {
+bool ImageDispatch<I>::write(io::AioCompletion *aio_comp,
+                             io::Extents &&image_extents, bufferlist &&bl,
+                             IOContext io_context, int op_flags,
+                             const ZTracer::Trace &parent_trace, uint64_t tid,
+                             std::atomic<uint32_t> *image_dispatch_flags,
+                             io::DispatchResult *dispatch_result,
+                             Context **on_finish, Context *on_dispatched) {
   auto cct = m_image_ctx->cct;
   ldout(cct, 20) << "tid=" << tid << ", image_extents=" << image_extents
                  << dendl;
@@ -139,13 +141,14 @@ bool ImageDispatch<I>::write(
 }
 
 template <typename I>
-bool ImageDispatch<I>::discard(
-    io::AioCompletion* aio_comp, io::Extents &&image_extents,
-    uint32_t discard_granularity_bytes, IOContext io_context,
-    const ZTracer::Trace &parent_trace, uint64_t tid,
-    std::atomic<uint32_t>* image_dispatch_flags,
-    io::DispatchResult* dispatch_result, Context** on_finish,
-    Context* on_dispatched) {
+bool ImageDispatch<I>::discard(io::AioCompletion *aio_comp,
+                               io::Extents &&image_extents,
+                               uint32_t discard_granularity_bytes,
+                               IOContext io_context,
+                               const ZTracer::Trace &parent_trace, uint64_t tid,
+                               std::atomic<uint32_t> *image_dispatch_flags,
+                               io::DispatchResult *dispatch_result,
+                               Context **on_finish, Context *on_dispatched) {
   auto cct = m_image_ctx->cct;
   ldout(cct, 20) << "tid=" << tid << ", image_extents=" << image_extents
                  << dendl;
@@ -158,12 +161,14 @@ bool ImageDispatch<I>::discard(
 }
 
 template <typename I>
-bool ImageDispatch<I>::write_same(
-    io::AioCompletion* aio_comp, io::Extents &&image_extents, bufferlist &&bl,
-    IOContext io_context, int op_flags, const ZTracer::Trace &parent_trace,
-    uint64_t tid, std::atomic<uint32_t>* image_dispatch_flags,
-    io::DispatchResult* dispatch_result, Context** on_finish,
-    Context* on_dispatched) {
+bool ImageDispatch<I>::write_same(io::AioCompletion *aio_comp,
+                                  io::Extents &&image_extents, bufferlist &&bl,
+                                  IOContext io_context, int op_flags,
+                                  const ZTracer::Trace &parent_trace,
+                                  uint64_t tid,
+                                  std::atomic<uint32_t> *image_dispatch_flags,
+                                  io::DispatchResult *dispatch_result,
+                                  Context **on_finish, Context *on_dispatched) {
   auto cct = m_image_ctx->cct;
   ldout(cct, 20) << "tid=" << tid << ", image_extents=" << image_extents
                  << dendl;
@@ -177,12 +182,12 @@ bool ImageDispatch<I>::write_same(
 
 template <typename I>
 bool ImageDispatch<I>::compare_and_write(
-    io::AioCompletion* aio_comp, io::Extents &&image_extents,
+    io::AioCompletion *aio_comp, io::Extents &&image_extents,
     bufferlist &&cmp_bl, bufferlist &&bl, uint64_t *mismatch_offset,
     IOContext io_context, int op_flags, const ZTracer::Trace &parent_trace,
-    uint64_t tid, std::atomic<uint32_t>* image_dispatch_flags,
-    io::DispatchResult* dispatch_result, Context** on_finish,
-    Context* on_dispatched) {
+    uint64_t tid, std::atomic<uint32_t> *image_dispatch_flags,
+    io::DispatchResult *dispatch_result, Context **on_finish,
+    Context *on_dispatched) {
   auto cct = m_image_ctx->cct;
   ldout(cct, 20) << "tid=" << tid << ", image_extents=" << image_extents
                  << dendl;
@@ -195,12 +200,12 @@ bool ImageDispatch<I>::compare_and_write(
 }
 
 template <typename I>
-bool ImageDispatch<I>::flush(
-    io::AioCompletion* aio_comp, io::FlushSource flush_source,
-    const ZTracer::Trace &parent_trace, uint64_t tid,
-    std::atomic<uint32_t>* image_dispatch_flags,
-    io::DispatchResult* dispatch_result, Context** on_finish,
-    Context* on_dispatched) {
+bool ImageDispatch<I>::flush(io::AioCompletion *aio_comp,
+                             io::FlushSource flush_source,
+                             const ZTracer::Trace &parent_trace, uint64_t tid,
+                             std::atomic<uint32_t> *image_dispatch_flags,
+                             io::DispatchResult *dispatch_result,
+                             Context **on_finish, Context *on_dispatched) {
   auto cct = m_image_ctx->cct;
   ldout(cct, 20) << "tid=" << tid << dendl;
 
@@ -226,8 +231,8 @@ bool ImageDispatch<I>::is_lock_required(bool read_op) const {
 
 template <typename I>
 bool ImageDispatch<I>::needs_exclusive_lock(bool read_op, uint64_t tid,
-                                            io::DispatchResult* dispatch_result,
-                                            Context* on_dispatched) {
+                                            io::DispatchResult *dispatch_result,
+                                            Context *on_dispatched) {
   auto cct = m_image_ctx->cct;
   bool lock_required = false;
   {
@@ -248,14 +253,14 @@ bool ImageDispatch<I>::needs_exclusive_lock(bool read_op, uint64_t tid,
 
       *dispatch_result = io::DISPATCH_RESULT_CONTINUE;
       on_dispatched->complete(
-        m_image_ctx->exclusive_lock->get_unlocked_op_error());
+          m_image_ctx->exclusive_lock->get_unlocked_op_error());
       return true;
     }
 
     // block potential races with other incoming IOs
     std::unique_lock locker{m_lock};
-    bool retesting_lock = (
-      !m_on_dispatches.empty() && m_on_dispatches.front() == on_dispatched);
+    bool retesting_lock =
+        (!m_on_dispatches.empty() && m_on_dispatches.front() == on_dispatched);
     if (!m_on_dispatches.empty() && !retesting_lock) {
       *dispatch_result = io::DISPATCH_RESULT_RESTART;
       m_on_dispatches.push_back(on_dispatched);
@@ -271,8 +276,9 @@ bool ImageDispatch<I>::needs_exclusive_lock(bool read_op, uint64_t tid,
     locker.unlock();
 
     *dispatch_result = io::DISPATCH_RESULT_RESTART;
-    auto ctx = create_context_callback<
-      ImageDispatch<I>, &ImageDispatch<I>::handle_acquire_lock>(this);
+    auto ctx =
+        create_context_callback<ImageDispatch<I>,
+                                &ImageDispatch<I>::handle_acquire_lock>(this);
     m_image_ctx->exclusive_lock->acquire_lock(ctx);
     return true;
   }
@@ -280,15 +286,14 @@ bool ImageDispatch<I>::needs_exclusive_lock(bool read_op, uint64_t tid,
   return false;
 }
 
-template <typename I>
-void ImageDispatch<I>::handle_acquire_lock(int r) {
+template <typename I> void ImageDispatch<I>::handle_acquire_lock(int r) {
   auto cct = m_image_ctx->cct;
   ldout(cct, 5) << "r=" << r << dendl;
 
   std::unique_lock locker{m_lock};
   ceph_assert(!m_on_dispatches.empty());
 
-  Context* failed_dispatch = nullptr;
+  Context *failed_dispatch = nullptr;
   Contexts on_dispatches;
   if (r == -ESHUTDOWN) {
     ldout(cct, 5) << "IO raced with exclusive lock shutdown" << dendl;

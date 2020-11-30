@@ -2,10 +2,11 @@
 // vim: ts=8 sw=2 smarttab
 
 #include "librbd/io/ImageDispatchSpec.h"
+#include "common/latency_tracker.h"
 #include "librbd/ImageCtx.h"
 #include "librbd/io/AioCompletion.h"
-#include "librbd/io/ImageRequest.h"
 #include "librbd/io/ImageDispatcherInterface.h"
+#include "librbd/io/ImageRequest.h"
 #include <boost/variant.hpp>
 
 namespace librbd {
@@ -16,13 +17,14 @@ void ImageDispatchSpec::C_Dispatcher::complete(int r) {
   case DISPATCH_RESULT_RESTART:
     ceph_assert(image_dispatch_spec->dispatch_layer != 0);
     image_dispatch_spec->dispatch_layer = static_cast<ImageDispatchLayer>(
-      image_dispatch_spec->dispatch_layer - 1);
+        image_dispatch_spec->dispatch_layer - 1);
     [[fallthrough]];
   case DISPATCH_RESULT_CONTINUE:
     if (r < 0) {
       // bubble dispatch failure through AioCompletion
       image_dispatch_spec->dispatch_result = DISPATCH_RESULT_COMPLETE;
       image_dispatch_spec->fail(r);
+      LT_CP();
       return;
     }
 
@@ -42,6 +44,7 @@ void ImageDispatchSpec::C_Dispatcher::finish(int r) {
 }
 
 void ImageDispatchSpec::send() {
+  LT_CP();
   image_dispatcher->send(this);
 }
 

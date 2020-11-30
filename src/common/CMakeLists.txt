@@ -74,6 +74,7 @@ set(common_srcs
   hostname.cc
   ipaddr.cc
   iso_8601.cc
+  latency_tracker.cc
   lockdep.cc
   mempool.cc
   mime.c

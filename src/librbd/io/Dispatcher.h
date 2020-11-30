@@ -4,11 +4,12 @@
 #ifndef CEPH_LIBRBD_IO_DISPATCHER_H
 #define CEPH_LIBRBD_IO_DISPATCHER_H
 
-#include "include/int_types.h"
-#include "include/Context.h"
+#include "common/AsyncOpTracker.h"
 #include "common/ceph_mutex.h"
 #include "common/dout.h"
-#include "common/AsyncOpTracker.h"
+#include "common/latency_tracker.h"
+#include "include/Context.h"
+#include "include/int_types.h"
 #include "librbd/Utils.h"
 #include "librbd/io/DispatcherInterface.h"
 #include "librbd/io/Types.h"
@@ -16,8 +17,8 @@
 
 #define dout_subsys ceph_subsys_rbd
 #undef dout_prefix
-#define dout_prefix *_dout << "librbd::io::Dispatcher: " << this \
-                           << " " << __func__ << ": "
+#define dout_prefix                                                            \
+  *_dout << "librbd::io::Dispatcher: " << this << " " << __func__ << ": "
 
 namespace librbd {
 namespace io {
@@ -29,18 +30,14 @@ public:
   typedef typename DispatchInterfaceT::DispatchLayer DispatchLayer;
   typedef typename DispatchInterfaceT::DispatchSpec DispatchSpec;
 
-  Dispatcher(ImageCtxT* image_ctx)
-    : m_image_ctx(image_ctx),
-      m_lock(ceph::make_shared_mutex(
-        librbd::util::unique_lock_name("librbd::io::Dispatcher::lock",
-                                       this))) {
-  }
+  Dispatcher(ImageCtxT *image_ctx)
+      : m_image_ctx(image_ctx),
+        m_lock(ceph::make_shared_mutex(librbd::util::unique_lock_name(
+            "librbd::io::Dispatcher::lock", this))) {}
 
-  virtual ~Dispatcher() {
-    ceph_assert(m_dispatches.empty());
-  }
+  virtual ~Dispatcher() { ceph_assert(m_dispatches.empty()); }
 
-  void shut_down(Context* on_finish) override {
+  void shut_down(Context *on_finish) override {
     auto cct = m_image_ctx->cct;
     ldout(cct, 5) << dendl;
 
@@ -56,20 +53,19 @@ public:
     on_finish->complete(0);
   }
 
-  void register_dispatch(Dispatch* dispatch) override {
+  void register_dispatch(Dispatch *dispatch) override {
     auto cct = m_image_ctx->cct;
     auto type = dispatch->get_dispatch_layer();
     ldout(cct, 5) << "dispatch_layer=" << type << dendl;
 
     std::unique_lock locker{m_lock};
 
-    auto result = m_dispatches.insert(
-      {type, {dispatch, new AsyncOpTracker()}});
+    auto result = m_dispatches.insert({type, {dispatch, new AsyncOpTracker()}});
     ceph_assert(result.second);
   }
 
   void shut_down_dispatch(DispatchLayer dispatch_layer,
-                          Context* on_finish) override {
+                          Context *on_finish) override {
     auto cct = m_image_ctx->cct;
     ldout(cct, 5) << "dispatch_layer=" << dispatch_layer << dendl;
 
@@ -90,11 +86,13 @@ public:
     on_finish->complete(0);
   }
 
-  void send(DispatchSpec* dispatch_spec) {
+  void send(DispatchSpec *dispatch_spec) {
     auto cct = m_image_ctx->cct;
     ldout(cct, 20) << "dispatch_spec=" << dispatch_spec << dendl;
 
     auto dispatch_layer = dispatch_spec->dispatch_layer;
+
+    LT_CP();
 
     // apply the IO request to all layers -- this method will be re-invoked
     // by the dispatch layer if continuing / restarting the IO
@@ -109,7 +107,7 @@ public:
         break;
       }
 
-      auto& dispatch_meta = it->second;
+      auto &dispatch_meta = it->second;
       auto dispatch = dispatch_meta.dispatch;
       auto async_op_tracker = dispatch_meta.async_op_tracker;
       dispatch_spec->dispatch_result = DISPATCH_RESULT_INVALID;
@@ -136,35 +134,32 @@ public:
 
 protected:
   struct DispatchMeta {
-    Dispatch* dispatch = nullptr;
-    AsyncOpTracker* async_op_tracker = nullptr;
+    Dispatch *dispatch = nullptr;
+    AsyncOpTracker *async_op_tracker = nullptr;
 
-    DispatchMeta() {
-    }
-    DispatchMeta(Dispatch* dispatch, AsyncOpTracker* async_op_tracker)
-      : dispatch(dispatch), async_op_tracker(async_op_tracker) {
-    }
+    DispatchMeta() {}
+    DispatchMeta(Dispatch *dispatch, AsyncOpTracker *async_op_tracker)
+        : dispatch(dispatch), async_op_tracker(async_op_tracker) {}
   };
 
-  ImageCtxT* m_image_ctx;
+  ImageCtxT *m_image_ctx;
 
   ceph::shared_mutex m_lock;
   std::map<DispatchLayer, DispatchMeta> m_dispatches;
 
-  virtual bool send_dispatch(Dispatch* dispatch,
-                             DispatchSpec* dispatch_spec) = 0;
+  virtual bool send_dispatch(Dispatch *dispatch,
+                             DispatchSpec *dispatch_spec) = 0;
 
 protected:
   struct C_LayerIterator : public Context {
-    Dispatcher* dispatcher;
-    Context* on_finish;
+    Dispatcher *dispatcher;
+    Context *on_finish;
     DispatchLayer dispatch_layer;
 
-    C_LayerIterator(Dispatcher* dispatcher,
-                    DispatchLayer start_layer,
-                    Context* on_finish)
-    : dispatcher(dispatcher), on_finish(on_finish), dispatch_layer(start_layer) {
-    }
+    C_LayerIterator(Dispatcher *dispatcher, DispatchLayer start_layer,
+                    Context *on_finish)
+        : dispatcher(dispatcher), on_finish(on_finish),
+          dispatch_layer(start_layer) {}
 
     void complete(int r) override {
       while (true) {
@@ -176,7 +171,7 @@ protected:
           return;
         }
 
-        auto& dispatch_meta = it->second;
+        auto &dispatch_meta = it->second;
         auto dispatch = dispatch_meta.dispatch;
 
         // prevent recursive locking back into the dispatcher while handling IO
@@ -195,46 +190,38 @@ protected:
       }
     }
 
-    void finish(int r) override {
-      on_finish->complete(0);
-    }
-    virtual bool execute(Dispatch* dispatch,
-                         Context* on_finish) = 0;
+    void finish(int r) override { on_finish->complete(0); }
+    virtual bool execute(Dispatch *dispatch, Context *on_finish) = 0;
   };
 
   struct C_InvalidateCache : public C_LayerIterator {
-    C_InvalidateCache(Dispatcher* dispatcher, DispatchLayer start_layer, Context* on_finish)
-      : C_LayerIterator(dispatcher, start_layer, on_finish) {
-    }
+    C_InvalidateCache(Dispatcher *dispatcher, DispatchLayer start_layer,
+                      Context *on_finish)
+        : C_LayerIterator(dispatcher, start_layer, on_finish) {}
 
-    bool execute(Dispatch* dispatch,
-                 Context* on_finish) override {
+    bool execute(Dispatch *dispatch, Context *on_finish) override {
       return dispatch->invalidate_cache(on_finish);
     }
   };
 
 private:
-  void shut_down_dispatch(DispatchMeta& dispatch_meta,
-                          Context** on_finish) {
+  void shut_down_dispatch(DispatchMeta &dispatch_meta, Context **on_finish) {
     auto dispatch = dispatch_meta.dispatch;
     auto async_op_tracker = dispatch_meta.async_op_tracker;
 
     auto ctx = *on_finish;
-    ctx = new LambdaContext(
-      [dispatch, async_op_tracker, ctx](int r) {
-        delete dispatch;
-        delete async_op_tracker;
+    ctx = new LambdaContext([dispatch, async_op_tracker, ctx](int r) {
+      delete dispatch;
+      delete async_op_tracker;
 
-        ctx->complete(r);
-      });
-    ctx = new LambdaContext([dispatch, ctx](int r) {
-        dispatch->shut_down(ctx);
-      });
+      ctx->complete(r);
+    });
+    ctx =
+        new LambdaContext([dispatch, ctx](int r) { dispatch->shut_down(ctx); });
     *on_finish = new LambdaContext([async_op_tracker, ctx](int r) {
-        async_op_tracker->wait_for_ops(ctx);
-      });
+      async_op_tracker->wait_for_ops(ctx);
+    });
   }
-
 };
 
 } // namespace io
